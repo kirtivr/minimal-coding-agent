@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sandbox import run_command
 from tools import dispatch
-from agent import load_dotenv, get_config
+from agent import load_dotenv, get_config, setup_logging, LOGGER, process_tool_calls
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +241,79 @@ class TestCombinedWorkflows(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Logging configuration / persistence
+# ---------------------------------------------------------------------------
+
+class TestLoggingConfig(unittest.TestCase):
+    """Logging should support file persistence and logger-backed runtime paths."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self._env_backup = {
+            "AGENT_LOG_FILE": os.environ.get("AGENT_LOG_FILE"),
+            "AGENT_LOG_LEVEL": os.environ.get("AGENT_LOG_LEVEL"),
+            "AGENT_LOG_CONSOLE": os.environ.get("AGENT_LOG_CONSOLE"),
+            "OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY"),
+            "OPENROUTER_MODEL": os.environ.get("OPENROUTER_MODEL"),
+        }
+        self._clear_logger_handlers()
+
+    def tearDown(self):
+        self._clear_logger_handlers()
+        for key, value in self._env_backup.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _clear_logger_handlers(self):
+        for handler in list(LOGGER.handlers):
+            handler.close()
+            LOGGER.removeHandler(handler)
+
+    def test_get_config_writes_logs_to_configured_file(self):
+        log_path = os.path.join(self.tmpdir, "agent-test.log")
+        os.environ["AGENT_LOG_FILE"] = log_path
+        os.environ["AGENT_LOG_LEVEL"] = "INFO"
+        os.environ["AGENT_LOG_CONSOLE"] = "false"
+        os.environ["OPENROUTER_API_KEY"] = "test-api-key"
+
+        api_key, model = get_config()
+
+        self.assertEqual(api_key, "test-api-key")
+        self.assertEqual(model, "minimax/minimax-m2.5")
+        self.assertTrue(os.path.exists(log_path))
+        with open(log_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("Configuration loaded. Model", content)
+
+    def test_process_tool_calls_logs_runtime_events(self):
+        log_path = os.path.join(self.tmpdir, "agent-runtime.log")
+        setup_logging(log_file=log_path, log_level="INFO", console_enabled=False)
+
+        tool_calls = [{
+            "id": "call_1",
+            "function": {
+                "name": "read_file",
+                "arguments": json.dumps({"path": "sample.txt"}),
+            },
+        }]
+
+        with unittest.mock.patch("agent.dispatch", return_value="tool output"):
+            result = process_tool_calls(tool_calls)
+
+        for handler in LOGGER.handlers:
+            if hasattr(handler, "flush"):
+                handler.flush()
+
+        self.assertEqual(result[0]["content"], "tool output")
+        with open(log_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("🔧 read_file", content)
+
+
+# ---------------------------------------------------------------------------
 # Config / dotenv
 # ---------------------------------------------------------------------------
 
@@ -254,6 +327,7 @@ class TestConfig(unittest.TestCase):
         load_dotenv()
         _, model = get_config()
         self.assertEqual(model, "minimax/minimax-m2.5")
+        self.assertGreaterEqual(len(LOGGER.handlers), 1)
 
 
 if __name__ == "__main__":
