@@ -87,7 +87,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "search_files",
-            "description": "Search for a text pattern in files, like grep.",
+            "description": "Search for a text pattern in files recursively using cross-platform text scanning.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -154,16 +154,58 @@ def list_directory(path: str = ".") -> str:
 
 
 def search_files(pattern: str, path: str = ".") -> str:
-    cmd = f'grep -rn --include="*.py" --include="*.txt" --include="*.md" --include="*.json" --include="*.yaml" --include="*.yml" --include="*.toml" --include="*.cfg" --include="*.ini" --include="*.js" --include="*.ts" --include="*.html" --include="*.css" "{pattern}" "{path}"'
-    result = sandbox_run(cmd, timeout=15)
-    if result["returncode"] == 0 and result["stdout"]:
-        lines = result["stdout"].strip().split("\n")
-        if len(lines) > 50:
-            return "\n".join(lines[:50]) + f"\n... ({len(lines) - 50} more matches)"
-        return result["stdout"].strip()
-    if result["returncode"] == 1:
+    include_extensions = {
+        ".py",
+        ".txt",
+        ".md",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".cfg",
+        ".ini",
+        ".js",
+        ".ts",
+        ".html",
+        ".css",
+    }
+
+    try:
+        if not os.path.exists(path):
+            return f"Search error: Path '{path}' does not exist."
+
+        files_to_search = []
+        if os.path.isfile(path):
+            _, ext = os.path.splitext(path)
+            if ext.lower() in include_extensions:
+                files_to_search.append(path)
+        else:
+            for root, dirs, files in os.walk(path):
+                dirs.sort()
+                files.sort()
+                for filename in files:
+                    _, ext = os.path.splitext(filename)
+                    if ext.lower() in include_extensions:
+                        files_to_search.append(os.path.join(root, filename))
+    except Exception as e:
+        return f"Search error: {e}"
+
+    matches = []
+    for file_path in files_to_search:
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                for line_number, line in enumerate(f, start=1):
+                    if pattern in line:
+                        display_path = os.path.relpath(file_path, ".").replace(os.sep, "/")
+                        matches.append(f"{display_path}:{line_number}:{line.rstrip()}")
+        except (OSError, UnicodeError):
+            continue
+
+    if not matches:
         return f"No matches found for '{pattern}' in '{path}'."
-    return f"Search error: {result['stderr']}"
+    if len(matches) > 50:
+        return "\n".join(matches[:50]) + f"\n... ({len(matches) - 50} more matches)"
+    return "\n".join(matches)
 
 
 # --- Dispatch ---

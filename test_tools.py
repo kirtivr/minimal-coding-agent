@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 import tempfile
 from tools import dispatch
 from sandbox import run_command
@@ -40,13 +41,53 @@ def test_run_command():
 
 
 def test_search_files():
-    result = dispatch("search_files", json.dumps({"pattern": "def dispatch", "path": "."}))
-    assert "tools.py" in result
+    with tempfile.TemporaryDirectory() as tmpdir:
+        file_path = os.path.join(tmpdir, "sample.txt")
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write("alpha\nneedle-value\nomega\n")
+
+        result = dispatch("search_files", json.dumps({"pattern": "needle-value", "path": tmpdir}))
+        assert "sample.txt:2:needle-value" in result
     print("PASS: search_files")
 
 
+def test_search_files_no_matches():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        file_path = os.path.join(tmpdir, "sample.txt")
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write("alpha\nbeta\ngamma\n")
+
+        result = dispatch("search_files", json.dumps({"pattern": "does-not-exist", "path": tmpdir}))
+        assert result == f"No matches found for 'does-not-exist' in '{tmpdir}'."
+    print("PASS: search_files no matches")
+
+
+def test_search_files_nested_paths_or_extension_filtering():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        nested = os.path.join(tmpdir, "nested", "inner")
+        os.makedirs(nested)
+
+        py_file = os.path.join(nested, "keep.py")
+        txt_file = os.path.join(tmpdir, "notes.txt")
+        bin_file = os.path.join(nested, "skip.bin")
+
+        with open(py_file, "w", encoding="utf-8") as f:
+            f.write("TARGET_PATTERN = True\n")
+        with open(txt_file, "w", encoding="utf-8") as f:
+            f.write("TARGET_PATTERN in text\n")
+        with open(bin_file, "w", encoding="utf-8") as f:
+            f.write("TARGET_PATTERN in excluded extension\n")
+
+        result = dispatch("search_files", json.dumps({"pattern": "TARGET_PATTERN", "path": tmpdir}))
+        assert "keep.py:1:TARGET_PATTERN = True" in result
+        assert "notes.txt:1:TARGET_PATTERN in text" in result
+        assert "skip.bin" not in result
+    print("PASS: search_files nested paths + extension filtering")
+
+
 def test_sandbox_timeout():
-    result = run_command("sleep 10", timeout=1)
+    command = f'"{sys.executable}" -c "import time; time.sleep(10)"'
+    result = run_command(command, timeout=1)
     assert result["returncode"] == -1
     assert "timed out" in result["stderr"]
     print("PASS: sandbox timeout")
@@ -70,6 +111,8 @@ if __name__ == "__main__":
     test_write_and_read_file()
     test_run_command()
     test_search_files()
+    test_search_files_no_matches()
+    test_search_files_nested_paths_or_extension_filtering()
     test_sandbox_timeout()
     test_dispatch_unknown_tool()
     test_dispatch_bad_json()
