@@ -104,6 +104,130 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "subagent_create_task",
+            "description": "Create a subagent task for a specific role.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "role": {
+                        "type": "string",
+                        "enum": ["research", "monitoring", "interaction"],
+                        "description": "Subagent role assigned to the task",
+                    },
+                    "task": {
+                        "type": "string",
+                        "description": "Task instructions for the subagent",
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Optional structured metadata for orchestration context",
+                    },
+                },
+                "required": ["role", "task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "subagent_start_task",
+            "description": "Start a previously created subagent task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Unique task identifier returned by subagent_create_task",
+                    }
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "subagent_task_status",
+            "description": "Get status for a specific subagent task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task identifier to inspect",
+                    }
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "subagent_list_tasks",
+            "description": "List subagent tasks, optionally filtered by role and/or status.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "role": {
+                        "type": "string",
+                        "enum": ["research", "monitoring", "interaction"],
+                        "description": "Optional role filter",
+                    },
+                    "status": {
+                        "type": "string",
+                        "description": "Optional status filter (created|running|completed|failed|cancelled)",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "subagent_cancel_task",
+            "description": "Cancel a subagent task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task identifier to cancel",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional cancellation reason",
+                    },
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "subagent_collect_output",
+            "description": "Collect output for a subagent task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task identifier to collect output from",
+                    },
+                    "clear": {
+                        "type": "boolean",
+                        "description": "Whether to clear stored output after collection (default: false)",
+                    },
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
 ]
 
 # --- Tool Implementations ---
@@ -208,6 +332,146 @@ def search_files(pattern: str, path: str = ".") -> str:
     return "\n".join(matches)
 
 
+_VALID_SUBAGENT_ROLES = {"research", "monitoring", "interaction"}
+_ORCHESTRATION_HANDLERS = {}
+_ORCHESTRATION_STATE = {"next_id": 1, "tasks": {}}
+
+
+def register_orchestration_handlers(handlers: dict) -> str:
+    """Register optional orchestrator callbacks from agent.py."""
+    global _ORCHESTRATION_HANDLERS
+    _ORCHESTRATION_HANDLERS = handlers or {}
+    return "Registered orchestration handlers"
+
+
+def _json_success(payload: dict) -> str:
+    response = {"ok": True}
+    response.update(payload)
+    return json.dumps(response)
+
+
+def _json_error(message: str) -> str:
+    return json.dumps({"ok": False, "error": message})
+
+
+def _validate_role(role: str) -> str:
+    if role not in _VALID_SUBAGENT_ROLES:
+        raise ValueError(
+            f"Invalid role '{role}'. Expected one of {sorted(_VALID_SUBAGENT_ROLES)}"
+        )
+    return role
+
+
+def _validate_task_id(task_id: str) -> str:
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise ValueError("task_id must be a non-empty string")
+    return task_id
+
+
+def _call_orchestrator_handler(action: str, fallback, **kwargs) -> str:
+    handler = _ORCHESTRATION_HANDLERS.get(action)
+    if handler is not None:
+        try:
+            result = handler(**kwargs)
+            if isinstance(result, str):
+                return result
+            if isinstance(result, dict):
+                return json.dumps(result)
+            return _json_error(f"Orchestrator handler '{action}' returned unsupported result")
+        except Exception as e:
+            return _json_error(f"Orchestrator handler '{action}' failed: {e}")
+    return fallback(**kwargs)
+
+
+def _subagent_create_task(role: str, task: str, metadata: dict | None = None) -> str:
+    _validate_role(role)
+    if not isinstance(task, str) or not task.strip():
+        raise ValueError("task must be a non-empty string")
+
+    task_id = f"task-{_ORCHESTRATION_STATE['next_id']}"
+    _ORCHESTRATION_STATE["next_id"] += 1
+    task_record = {
+        "task_id": task_id,
+        "role": role,
+        "task": task,
+        "metadata": metadata or {},
+        "status": "created",
+        "output": None,
+        "error": None,
+    }
+    _ORCHESTRATION_STATE["tasks"][task_id] = task_record
+    return _json_success({"task": task_record})
+
+
+def _subagent_start_task(task_id: str) -> str:
+    task_id = _validate_task_id(task_id)
+    task_record = _ORCHESTRATION_STATE["tasks"].get(task_id)
+    if task_record is None:
+        return _json_error(f"Unknown task_id '{task_id}'")
+    if task_record["status"] in {"completed", "failed", "cancelled"}:
+        return _json_error(
+            f"Cannot start task '{task_id}' from terminal status '{task_record['status']}'"
+        )
+    task_record["status"] = "running"
+    return _json_success({"task": task_record})
+
+
+def _subagent_task_status(task_id: str) -> str:
+    task_id = _validate_task_id(task_id)
+    task_record = _ORCHESTRATION_STATE["tasks"].get(task_id)
+    if task_record is None:
+        return _json_error(f"Unknown task_id '{task_id}'")
+    return _json_success({"task": task_record})
+
+
+def _subagent_list_tasks(role: str | None = None, status: str | None = None) -> str:
+    if role is not None:
+        _validate_role(role)
+
+    tasks = list(_ORCHESTRATION_STATE["tasks"].values())
+    if role is not None:
+        tasks = [task for task in tasks if task["role"] == role]
+    if status is not None:
+        tasks = [task for task in tasks if task["status"] == status]
+
+    return _json_success({"tasks": tasks, "count": len(tasks)})
+
+
+def _subagent_cancel_task(task_id: str, reason: str | None = None) -> str:
+    task_id = _validate_task_id(task_id)
+    task_record = _ORCHESTRATION_STATE["tasks"].get(task_id)
+    if task_record is None:
+        return _json_error(f"Unknown task_id '{task_id}'")
+    if task_record["status"] in {"completed", "failed", "cancelled"}:
+        return _json_error(
+            f"Cannot cancel task '{task_id}' from terminal status '{task_record['status']}'"
+        )
+    task_record["status"] = "cancelled"
+    if reason:
+        task_record["error"] = reason
+    return _json_success({"task": task_record})
+
+
+def _subagent_collect_output(task_id: str, clear: bool = False) -> str:
+    task_id = _validate_task_id(task_id)
+    task_record = _ORCHESTRATION_STATE["tasks"].get(task_id)
+    if task_record is None:
+        return _json_error(f"Unknown task_id '{task_id}'")
+
+    output = task_record.get("output")
+    response = {
+        "task_id": task_id,
+        "status": task_record.get("status"),
+        "output": output,
+        "error": task_record.get("error"),
+    }
+
+    if clear:
+        task_record["output"] = None
+
+    return _json_success(response)
+
+
 # --- Dispatch ---
 
 def dispatch(name: str, args_json: str) -> str:
@@ -217,10 +481,15 @@ def dispatch(name: str, args_json: str) -> str:
     except json.JSONDecodeError:
         return f"Error: Invalid JSON arguments: {args_json}"
 
+    if not isinstance(args, dict):
+        return f"Error: Tool arguments must be a JSON object for tool '{name}'"
+
     try:
         return _dispatch(name, args)
     except KeyError as e:
         return f"Error: Missing required argument {e} for tool '{name}'"
+    except ValueError as e:
+        return f"Error: {e}"
 
 
 def _dispatch(name: str, args: dict) -> str:
@@ -234,5 +503,46 @@ def _dispatch(name: str, args: dict) -> str:
         return list_directory(args.get("path", "."))
     elif name == "search_files":
         return search_files(args["pattern"], args.get("path", "."))
+    elif name == "subagent_create_task":
+        return _call_orchestrator_handler(
+            "create_task",
+            _subagent_create_task,
+            role=args["role"],
+            task=args["task"],
+            metadata=args.get("metadata"),
+        )
+    elif name == "subagent_start_task":
+        return _call_orchestrator_handler(
+            "start_task",
+            _subagent_start_task,
+            task_id=args["task_id"],
+        )
+    elif name == "subagent_task_status":
+        return _call_orchestrator_handler(
+            "task_status",
+            _subagent_task_status,
+            task_id=args["task_id"],
+        )
+    elif name == "subagent_list_tasks":
+        return _call_orchestrator_handler(
+            "list_tasks",
+            _subagent_list_tasks,
+            role=args.get("role"),
+            status=args.get("status"),
+        )
+    elif name == "subagent_cancel_task":
+        return _call_orchestrator_handler(
+            "cancel_task",
+            _subagent_cancel_task,
+            task_id=args["task_id"],
+            reason=args.get("reason"),
+        )
+    elif name == "subagent_collect_output":
+        return _call_orchestrator_handler(
+            "collect_output",
+            _subagent_collect_output,
+            task_id=args["task_id"],
+            clear=args.get("clear", False),
+        )
     else:
         return f"Error: Unknown tool '{name}'"

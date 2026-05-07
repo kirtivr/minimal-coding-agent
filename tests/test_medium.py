@@ -5,13 +5,23 @@ import os
 import sys
 import tempfile
 import shutil
+import threading
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import tools
 from sandbox import run_command
 from tools import dispatch
-from agent import load_dotenv, get_config, setup_logging, LOGGER, process_tool_calls
+from agent import (
+    load_dotenv,
+    get_config,
+    setup_logging,
+    LOGGER,
+    process_tool_calls,
+    SubagentOrchestrator,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +250,148 @@ class TestCombinedWorkflows(unittest.TestCase):
         self.assertNotIn("version 1", result)
 
 
+class TestSubagentOrchestrationWorkflows(unittest.TestCase):
+    """Validate subagent orchestration semantics in process_tool_calls."""
+
+    def test_process_tool_calls_schedules_subagents_concurrently_and_returns_structured_messages(self):
+        orchestrator = SubagentOrchestrator(max_workers=2, poll_interval=0.01)
+        inflight = 0
+        max_inflight = 0
+        lock = threading.Lock()
+
+        def fake_dispatch(name, args):
+            nonlocal inflight, max_inflight
+            with lock:
+                inflight += 1
+                max_inflight = max(max_inflight, inflight)
+            try:
+                time.sleep(0.15)
+                return f"completed {name}"
+            finally:
+                with lock:
+                    inflight -= 1
+
+        tool_calls = [
+            {
+                "id": "call_a",
+                "function": {
+                    "name": "subagent_create_task",
+                    "arguments": json.dumps({"role": "research", "task": "task A"}),
+                },
+            },
+            {
+                "id": "call_b",
+                "function": {
+                    "name": "subagent_create_task",
+                    "arguments": json.dumps({"role": "monitoring", "task": "task B"}),
+                },
+            },
+        ]
+
+        try:
+            with unittest.mock.patch("agent.dispatch", side_effect=fake_dispatch):
+                first_results, has_pending = process_tool_calls(tool_calls, orchestrator)
+                self.assertEqual(first_results, [])
+                self.assertTrue(has_pending)
+
+                time.sleep(0.2)
+                final_results, has_pending = process_tool_calls([], orchestrator)
+
+            self.assertFalse(has_pending)
+            self.assertGreaterEqual(max_inflight, 2)
+            self.assertEqual(len(final_results), 2)
+
+            for message in final_results:
+                self.assertEqual(message["role"], "tool")
+                self.assertIn(message["tool_call_id"], {"call_a", "call_b"})
+
+                payload = json.loads(message["content"])
+                self.assertEqual(payload["status"], "completed")
+                self.assertIn("subagent", payload)
+                self.assertIn("task_id", payload["subagent"])
+                self.assertIn("role", payload["subagent"])
+                self.assertEqual(payload["error"], None)
+                self.assertIn("completed subagent_create_task", payload["output"])
+        finally:
+            orchestrator.shutdown()
+
+
+class TestSubagentCoordinationCommands(unittest.TestCase):
+    """Validate dispatch integration for coordination commands."""
+
+    def setUp(self):
+        tools._ORCHESTRATION_STATE["tasks"].clear()
+        tools._ORCHESTRATION_STATE["next_id"] = 1
+        tools._ORCHESTRATION_HANDLERS = {}
+
+    def test_status_list_cancel_collect_lifecycle(self):
+        created = json.loads(
+            dispatch(
+                "subagent_create_task",
+                json.dumps({"role": "research", "task": "gather data"}),
+            )
+        )
+        self.assertTrue(created["ok"])
+        task_id = created["task"]["task_id"]
+
+        status = json.loads(dispatch("subagent_task_status", json.dumps({"task_id": task_id})))
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["task"]["status"], "created")
+
+        listed = json.loads(dispatch("subagent_list_tasks", json.dumps({"role": "research"})))
+        self.assertTrue(listed["ok"])
+        self.assertEqual(listed["count"], 1)
+        self.assertEqual(listed["tasks"][0]["task_id"], task_id)
+
+        cancelled = json.loads(
+            dispatch(
+                "subagent_cancel_task",
+                json.dumps({"task_id": task_id, "reason": "no longer needed"}),
+            )
+        )
+        self.assertTrue(cancelled["ok"])
+        self.assertEqual(cancelled["task"]["status"], "cancelled")
+        self.assertEqual(cancelled["task"]["error"], "no longer needed")
+
+        collected = json.loads(
+            dispatch("subagent_collect_output", json.dumps({"task_id": task_id, "clear": True}))
+        )
+        self.assertTrue(collected["ok"])
+        self.assertEqual(collected["task_id"], task_id)
+        self.assertEqual(collected["status"], "cancelled")
+        self.assertEqual(collected["error"], "no longer needed")
+
+    def test_invalid_arguments_and_unknown_task_paths(self):
+        invalid_role_result = dispatch(
+            "subagent_create_task",
+            json.dumps({"role": "invalid", "task": "x"}),
+        )
+        self.assertIn("Error", invalid_role_result)
+        self.assertIn("Invalid role", invalid_role_result)
+
+        invalid_list_role = dispatch("subagent_list_tasks", json.dumps({"role": "invalid"}))
+        self.assertIn("Error", invalid_list_role)
+        self.assertIn("Invalid role", invalid_list_role)
+
+        missing_arg = dispatch("subagent_task_status", json.dumps({}))
+        self.assertIn("Missing required argument", missing_arg)
+
+        unknown_status = json.loads(dispatch("subagent_task_status", json.dumps({"task_id": "task-999"})))
+        self.assertFalse(unknown_status["ok"])
+        self.assertIn("Unknown task_id", unknown_status["error"])
+
+        unknown_cancel = json.loads(dispatch("subagent_cancel_task", json.dumps({"task_id": "task-999"})))
+        self.assertFalse(unknown_cancel["ok"])
+        self.assertIn("Unknown task_id", unknown_cancel["error"])
+
+        unknown_collect = json.loads(dispatch("subagent_collect_output", json.dumps({"task_id": "task-999"})))
+        self.assertFalse(unknown_collect["ok"])
+        self.assertIn("Unknown task_id", unknown_collect["error"])
+
+
+# ---------------------------------------------------------------------------
+# Logging configuration / persistence
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Logging configuration / persistence
 # ---------------------------------------------------------------------------
@@ -292,25 +444,45 @@ class TestLoggingConfig(unittest.TestCase):
         log_path = os.path.join(self.tmpdir, "agent-runtime.log")
         setup_logging(log_file=log_path, log_level="INFO", console_enabled=False)
 
+        orchestrator = SubagentOrchestrator(max_workers=1, poll_interval=0.01)
         tool_calls = [{
             "id": "call_1",
             "function": {
-                "name": "read_file",
-                "arguments": json.dumps({"path": "sample.txt"}),
+                "name": "subagent_create_task",
+                "arguments": json.dumps({"role": "research", "task": "scan sample.txt"}),
             },
         }]
 
-        with unittest.mock.patch("agent.dispatch", return_value="tool output"):
-            result = process_tool_calls(tool_calls)
+        aggregated_results = []
+        try:
+            with unittest.mock.patch("agent.dispatch", return_value="tool output"):
+                result, has_pending = process_tool_calls(tool_calls, orchestrator)
+                aggregated_results.extend(result)
+
+                if has_pending:
+                    time.sleep(0.05)
+                    result, _ = process_tool_calls([], orchestrator)
+                    aggregated_results.extend(result)
+        finally:
+            orchestrator.shutdown()
 
         for handler in LOGGER.handlers:
             if hasattr(handler, "flush"):
                 handler.flush()
 
-        self.assertEqual(result[0]["content"], "tool output")
+        self.assertEqual(len(aggregated_results), 1)
+        payload = json.loads(aggregated_results[0]["content"])
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["output"], "tool output")
+
         with open(log_path, "r", encoding="utf-8") as f:
             content = f.read()
-        self.assertIn("🔧 read_file", content)
+
+        self.assertIn("🔧 subagent_create_task", content)
+        self.assertIn("Created subagent task subagent-call_1", content)
+        self.assertIn("Scheduled subagent task subagent-call_1", content)
+        self.assertIn("Subagent task subagent-call_1 completed", content)
+        self.assertIn("Aggregated 1 completed subagent result(s).", content)
 
 
 # ---------------------------------------------------------------------------

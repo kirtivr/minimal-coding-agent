@@ -29,7 +29,7 @@ class TestToolSchemas(unittest.TestCase):
     """Verify tool schemas are valid OpenAI function-calling format."""
 
     def test_schema_count(self):
-        self.assertEqual(len(TOOL_SCHEMAS), 5)
+        self.assertEqual(len(TOOL_SCHEMAS), 11)
 
     def test_schema_structure(self):
         for schema in TOOL_SCHEMAS:
@@ -40,7 +40,19 @@ class TestToolSchemas(unittest.TestCase):
 
     def test_schema_names(self):
         names = {s["function"]["name"] for s in TOOL_SCHEMAS}
-        expected = {"read_file", "write_file", "run_command", "list_directory", "search_files"}
+        expected = {
+            "read_file",
+            "write_file",
+            "run_command",
+            "list_directory",
+            "search_files",
+            "subagent_create_task",
+            "subagent_start_task",
+            "subagent_task_status",
+            "subagent_list_tasks",
+            "subagent_cancel_task",
+            "subagent_collect_output",
+        }
         self.assertEqual(names, expected)
 
 
@@ -137,6 +149,34 @@ class TestSearchFiles(unittest.TestCase):
         finally:
             os.rmdir(tmpdir)
 
+
+class TestDispatchSmoke(unittest.TestCase):
+    """Lightweight dispatch smoke coverage for orchestration tools."""
+
+    def test_subagent_routes_return_structured_json(self):
+        created = dispatch(
+            "subagent_create_task",
+            json.dumps({"role": "research", "task": "summarize repository status"}),
+        )
+        created_payload = json.loads(created)
+        self.assertTrue(created_payload["ok"])
+        self.assertIn("task", created_payload)
+        task_id = created_payload["task"]["task_id"]
+
+        status = dispatch("subagent_task_status", json.dumps({"task_id": task_id}))
+        status_payload = json.loads(status)
+        self.assertTrue(status_payload["ok"])
+        self.assertEqual(status_payload["task"]["task_id"], task_id)
+
+        listed = dispatch("subagent_list_tasks", json.dumps({"role": "research"}))
+        listed_payload = json.loads(listed)
+        self.assertTrue(listed_payload["ok"])
+        self.assertIn("tasks", listed_payload)
+        self.assertIn("count", listed_payload)
+
+    def test_existing_unknown_tool_error_behavior_unchanged(self):
+        result = dispatch("unknown_tool", "{}")
+        self.assertIn("Error: Unknown tool", result)
 
 if __name__ == "__main__":
     unittest.main()

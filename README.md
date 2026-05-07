@@ -5,16 +5,23 @@ A coding agent in under 400 lines of Python. It connects to any LLM through [Ope
 ## How it works
 
 ```
-You ↔ agent.py (chat loop) ↔ OpenRouter API ↔ Any LLM
-              ↓
-      tools.py (5 tools + dispatch)
-              ↓
-      sandbox.py (subprocess with timeout)
+You ↔ agent.py (main agent + orchestrator) ↔ OpenRouter API ↔ Any LLM
+                      │
+                      ├─ standard tools via tools.py
+                      │        ↓
+                      │   sandbox.py (subprocess with timeout)
+                      │
+                      └─ subagent workflows (parallel)
+                           ├─ research worker
+                           ├─ monitoring worker
+                           └─ interaction worker
 ```
 
-The agent runs a simple loop: send your message to the LLM, execute any tool calls it requests, feed results back, repeat until it responds with text.
+The main agent now acts as an orchestrator: it plans work, delegates independent tasks to subagents in parallel, polls for progress/results, then synthesizes outputs into a final response.
 
 ### Tools
+
+#### Standard tools (backward compatible)
 
 | Tool | What it does |
 |------|-------------|
@@ -23,6 +30,29 @@ The agent runs a simple loop: send your message to the LLM, execute any tool cal
 | `run_command` | Execute a shell command (with timeout) |
 | `list_directory` | List files and folders |
 | `search_files` | Search for text patterns across files |
+
+#### Subagent coordination tools
+
+| Tool | What it does | Typical response |
+|------|---------------|------------------|
+| `start_subagent` | Start a worker with a role (`research`, `monitoring`, `interaction`) and task payload | `{"subagent_id": "...", "status": "queued|running"}` |
+| `get_subagent_status` | Poll current status and optional progress metadata | `{"subagent_id": "...", "status": "running", "progress": ...}` |
+| `collect_subagent_result` | Retrieve final output, logs, and/or error details when complete | `{"subagent_id": "...", "status": "completed|failed", "result": ...}` |
+| `cancel_subagent` | Stop an in-flight worker when no longer needed | `{"subagent_id": "...", "status": "cancelled"}` |
+
+### Workflow pattern
+
+1. Main agent decomposes a request into independent subtasks.
+2. Main agent starts one or more subagents concurrently.
+3. Main agent periodically polls status while continuing other orchestration work.
+4. Main agent collects completed outputs and merges them into a single user-facing answer.
+
+### Operational notes
+
+- Parallel execution is best for independent tasks; tightly coupled steps should stay sequential.
+- Prefer status polling (`get_subagent_status`) for long-running jobs and only collect (`collect_subagent_result`) when a worker is terminal (`completed`, `failed`, or `cancelled`).
+- If subagent orchestration is unavailable or unnecessary, the agent should fall back to the standard single-agent tool loop, preserving existing behavior.
+- Errors from a single subagent should be isolated and surfaced with context; they should not automatically discard successful results from other workers.
 
 ## Setup
 
