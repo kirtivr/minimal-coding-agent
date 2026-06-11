@@ -128,13 +128,20 @@ def process_tool_calls(tool_calls: list) -> list:
     """Execute tool calls and return tool result messages."""
     results = []
     for tc in tool_calls:
-        name = tc["function"]["name"]
-        args = tc["function"].get("arguments", "{}")
+        if not isinstance(tc, dict):
+            continue
+        func = tc.get("function")
+        if not isinstance(func, dict):
+            continue
+        name = func.get("name")
+        if not name:
+            continue
+        args = func.get("arguments", "{}")
         LOGGER.info("🔧 %s(%s%s)", name, args[:80], "..." if len(args) > 80 else "")
         output = dispatch(name, args)
         results.append({
             "role": "tool",
-            "tool_call_id": tc["id"],
+            "tool_call_id": tc.get("id", ""),
             "content": output,
         })
     return results
