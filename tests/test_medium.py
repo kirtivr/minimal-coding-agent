@@ -108,7 +108,7 @@ class TestWriteFileEdges(unittest.TestCase):
 class TestRunCommandEdges(unittest.TestCase):
 
     def test_timeout(self):
-        result = run_command("sleep 10", timeout=1)
+        result = run_command('python -c "import time; time.sleep(10)"', timeout=1)
         self.assertEqual(result["returncode"], -1)
         self.assertIn("timed out", result["stderr"])
 
@@ -128,7 +128,7 @@ class TestRunCommandEdges(unittest.TestCase):
 
     def test_pipe_command(self):
         result = dispatch("run_command", json.dumps({
-            "command": "echo hello world | grep hello",
+            "command": "python -c \"print('hello world')\" | python -c \"import sys; sys.stdout.writelines(l for l in sys.stdin if 'hello' in l)\"",
         }))
         self.assertIn("hello world", result)
 
