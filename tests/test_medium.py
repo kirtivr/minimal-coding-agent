@@ -378,5 +378,53 @@ class TestProcessToolCallsMalformed(unittest.TestCase):
         self.assertEqual(result, [])
 
 
+# ---------------------------------------------------------------------------
+# process_tool_calls malformed payload handling
+# ---------------------------------------------------------------------------
+
+class TestProcessToolCallsMalformed(unittest.TestCase):
+    """process_tool_calls should survive malformed API payloads without KeyError."""
+
+    def test_missing_id(self):
+        tool_calls = [{
+            "function": {
+                "name": "read_file",
+                "arguments": json.dumps({"path": "sample.txt"}),
+            },
+        }]
+        with unittest.mock.patch("agent.dispatch", return_value="ok"):
+            result = process_tool_calls(tool_calls)
+        self.assertIsInstance(result, list)
+
+    def test_missing_function(self):
+        tool_calls = [{"id": "call_1"}]
+        result = process_tool_calls(tool_calls)
+        self.assertIsInstance(result, list)
+
+    def test_missing_name(self):
+        tool_calls = [{
+            "id": "call_1",
+            "function": {
+                "arguments": json.dumps({"path": "sample.txt"}),
+            },
+        }]
+        result = process_tool_calls(tool_calls)
+        self.assertIsInstance(result, list)
+
+    def test_missing_arguments(self):
+        tool_calls = [{
+            "id": "call_1",
+            "function": {
+                "name": "read_file",
+            },
+        }]
+        result = process_tool_calls(tool_calls)
+        self.assertIsInstance(result, list)
+
+    def test_empty_tool_calls(self):
+        result = process_tool_calls([])
+        self.assertEqual(result, [])
+
+
 if __name__ == "__main__":
     unittest.main()
