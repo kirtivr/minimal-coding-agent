@@ -124,17 +124,40 @@ def call_openrouter(messages: list, tools: list, api_key: str, model: str) -> di
     return data
 
 
+def _parse_tool_call(tc):
+    """Parse and validate a tool call dictionary."""
+    if not isinstance(tc, dict):
+        return None, None, None
+    call_id = tc.get("id", "")
+    func = tc.get("function")
+    if not isinstance(func, dict):
+        return None, None, call_id
+    name = func.get("name")
+    if not name:
+        return None, None, call_id
+    args = func.get("arguments", "{}")
+    return name, args, call_id
+
+
 def process_tool_calls(tool_calls: list) -> list:
     """Execute tool calls and return tool result messages."""
     results = []
     for tc in tool_calls:
-        name = tc["function"]["name"]
-        args = tc["function"].get("arguments", "{}")
-        LOGGER.info("🔧 %s(%s%s)", name, args[:80], "..." if len(args) > 80 else "")
+        name, args, call_id = _parse_tool_call(tc)
+        if not name:
+            if call_id:
+                results.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": "Error: malformed tool call",
+                })
+            continue
+        args_str = args if isinstance(args, str) else str(args)
+        LOGGER.info("🔧 %s(%s%s)", name, args_str[:80], "..." if len(args_str) > 80 else "")
         output = dispatch(name, args)
         results.append({
             "role": "tool",
-            "tool_call_id": tc["id"],
+            "tool_call_id": call_id,
             "content": output,
         })
     return results
