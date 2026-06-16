@@ -313,6 +313,64 @@ class TestLoggingConfig(unittest.TestCase):
         self.assertIn("🔧 read_file", content)
 
 
+class TestProcessToolCallsMalformed(unittest.TestCase):
+    """process_tool_calls should skip malformed payloads without crashing."""
+
+    def test_missing_id(self):
+        tool_calls = [{
+            "function": {
+                "name": "read_file",
+                "arguments": json.dumps({"path": "sample.txt"}),
+            },
+        }]
+        result = process_tool_calls(tool_calls)
+        self.assertIsInstance(result, list)
+
+    def test_missing_function(self):
+        tool_calls = [{
+            "id": "call_1",
+        }]
+        result = process_tool_calls(tool_calls)
+        self.assertIsInstance(result, list)
+
+    def test_missing_name_in_function(self):
+        tool_calls = [{
+            "id": "call_1",
+            "function": {
+                "arguments": json.dumps({"path": "sample.txt"}),
+            },
+        }]
+        result = process_tool_calls(tool_calls)
+        self.assertIsInstance(result, list)
+
+    def test_non_dict_function(self):
+        tool_calls = [{
+            "id": "call_1",
+            "function": "not a dict",
+        }]
+        result = process_tool_calls(tool_calls)
+        self.assertIsInstance(result, list)
+
+    def test_mixed_valid_and_invalid(self):
+        tool_calls = [
+            {
+                "id": "call_1",
+                "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "sample.txt"}),
+                },
+            },
+            {
+                "id": "call_2",
+                "function": "not a dict",
+            },
+        ]
+        with unittest.mock.patch("agent.dispatch", return_value="tool output"):
+            result = process_tool_calls(tool_calls)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["content"], "tool output")
+
+
 # ---------------------------------------------------------------------------
 # Config / dotenv
 # ---------------------------------------------------------------------------
