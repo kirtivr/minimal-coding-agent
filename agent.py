@@ -124,58 +124,82 @@ def call_openrouter(messages: list, tools: list, api_key: str, model: str) -> di
     return data
 
 
+def process_tool_calls(tool_calls: list) -> list:
+    """Execute tool calls and return tool result messages."""
+    results = []
+    for tc in tool_calls:
+        name = tc["function"]["name"]
+        args = tc["function"].get("arguments", "{}")
+        LOGGER.info("🔧 %s(%s%s)", name, args[:80], "..." if len(args) > 80 else "")
+        output = dispatch(name, args)
+        results.append({
+            "role": "tool",
+            "tool_call_id": tc["id"],
+            "content": output,
+        })
+    return results
+
+
 class Agent:
-    """Encapsulates agent state and provides interactive and task execution modes."""
+    """Minimal coding agent with subagent workflow support."""
 
     def __init__(self, api_key: str, model: str):
         self.api_key = api_key
         self.model = model
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    def _process_tool_calls(self, tool_calls: list) -> list:
-        """Execute tool calls and return tool result messages."""
-        results = []
-        for tc in tool_calls:
-            name = tc["function"]["name"]
-            args = tc["function"].get("arguments", "{}")
-            LOGGER.info("🔧 %s(%s%s)", name, args[:80], "..." if len(args) > 80 else "")
-            output = dispatch(name, args)
-            results.append({
-                "role": "tool",
-                "tool_call_id": tc["id"],
-                "content": output,
-            })
-        return results
+    def _handle_response(self, data: dict) -> tuple:
+        """Parse API response, update history, handle tool calls, and decide whether to continue.
+
+        Returns:
+            (should_continue: bool, text: str | None)
+        """
+        choice = data["choices"][0]
+        msg = choice["message"]
+
+        # Add assistant message to history
+        self.messages.append(msg)
+
+        # Check for tool calls
+        tool_calls = msg.get("tool_calls")
+        if tool_calls:
+            LOGGER.info("Processing %d tool call(s).", len(tool_calls))
+            tool_results = process_tool_calls(tool_calls)
+            self.messages.extend(tool_results)
+            return True, None
+
+        # Text response
+        text = msg.get("content")
+        if text:
+            LOGGER.info("Agent response sent to user.")
+            print(f"\nAgent: {text}\n")
+        return False, text
 
     def _agent_turn(self) -> str | None:
-        """Perform a single agent turn: call API, handle tool calls, and return assistant text if any."""
+        """Call the API and process the response, looping if tool calls are present.
+
+        Returns the final assistant text, or None on error.
+        """
         while True:
             try:
                 data = call_openrouter(self.messages, TOOL_SCHEMAS, self.api_key, self.model)
             except Exception as e:
                 LOGGER.exception("OpenRouter call failed")
-                return f"Error: {e}"
+                print(f"\nError: {e}")
+                return None
 
-            choice = data["choices"][0]
-            msg = choice["message"]
-            self.messages.append(msg)
+            should_continue, text = self._handle_response(data)
+            if not should_continue:
+                return text
 
-            tool_calls = msg.get("tool_calls")
-            if tool_calls:
-                LOGGER.info("Processing %d tool call(s).", len(tool_calls))
-                tool_results = self._process_tool_calls(tool_calls)
-                self.messages.extend(tool_results)
-                continue
-
-            return msg.get("content")
-
-    def run_interactive(self):
-        """Run the agent in interactive mode reading from stdin."""
+    def run(self):
+        """Main agent loop: read input, call API, handle tool calls, repeat."""
         LOGGER.info("Coding Agent started (model: %s)", self.model)
         print(f"Coding Agent (model: {self.model})")
         print("Type /quit to exit, Ctrl+C to interrupt.\n")
 
         while True:
+            # Get user input
             try:
                 user_input = input("You: ").strip()
             except (KeyboardInterrupt, EOFError):
@@ -191,21 +215,15 @@ class Agent:
                 break
 
             self.messages.append({"role": "user", "content": user_input})
-            response = self._agent_turn()
-            if response:
-                LOGGER.info("Agent response sent to user.")
-                print(f"\nAgent: {response}\n")
+            self._agent_turn()
 
-    def run_task(self, task_description: str) -> str | None:
-        """Run the agent on a specific task to completion and return the final text response."""
-        LOGGER.info("Task started: %s", task_description)
-        self.messages.append({"role": "user", "content": task_description})
-        response = self._agent_turn()
-        LOGGER.info("Task completed.")
-        return response
+
+def agent_loop():
+    """Entry point: configure and start the agent."""
+    api_key, model = get_config()
+    agent = Agent(api_key=api_key, model=model)
+    agent.run()
 
 
 if __name__ == "__main__":
-    api_key, model = get_config()
-    agent = Agent(api_key=api_key, model=model)
-    agent.run_interactive()
+    agent_loop()
