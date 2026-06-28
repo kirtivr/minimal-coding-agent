@@ -104,6 +104,27 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "delegate_task",
+            "description": "Spawn a subagent to handle a specialized task in parallel.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_description": {
+                        "type": "string",
+                        "description": "Description of the task to delegate",
+                    },
+                    "role": {
+                        "type": "string",
+                        "description": "Role or persona for the subagent (e.g., researcher, monitor)",
+                    },
+                },
+                "required": ["task_description", "role"],
+            },
+        },
+    },
 ]
 
 # --- Tool Implementations ---
@@ -208,6 +229,20 @@ def search_files(pattern: str, path: str = ".") -> str:
     return "\n".join(matches)
 
 
+def delegate_task(task_description: str, role: str) -> str:
+    """Delegate a task to a subagent and return its result."""
+    # Local import avoids circular dependency since agent.py imports from tools.py.
+    from agent import Agent, get_config
+
+    api_key, model = get_config()
+    subagent = Agent(api_key=api_key, model=model)
+    # Prepend a system-style role hint so the subagent knows its persona.
+    role_prompt = f"You are acting as a '{role}' subagent. Focus on the following task."
+    subagent.messages.append({"role": "user", "content": f"{role_prompt}\n\n{task_description}"})
+    result = subagent._agent_turn()
+    return result or "No response from subagent."
+
+
 # --- Dispatch ---
 
 def dispatch(name: str, args_json: str) -> str:
@@ -234,5 +269,7 @@ def _dispatch(name: str, args: dict) -> str:
         return list_directory(args.get("path", "."))
     elif name == "search_files":
         return search_files(args["pattern"], args.get("path", "."))
+    elif name == "delegate_task":
+        return delegate_task(args["task_description"], args["role"])
     else:
         return f"Error: Unknown tool '{name}'"
