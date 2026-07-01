@@ -128,7 +128,7 @@ class TestRunCommandEdges(unittest.TestCase):
 
     def test_pipe_command(self):
         result = dispatch("run_command", json.dumps({
-            "command": f'"{sys.executable}" -c "print(\'hello world\')" | "{sys.executable}" -c "import sys; [print(line.strip()) for line in sys.stdin if \'hello\' in line]"',
+            "command": f'"{sys.executable}" -c "print(\'hello world\')" | "{sys.executable}" -c "import sys; print(sys.stdin.read())"',
         }))
         self.assertIn("hello world", result)
 
