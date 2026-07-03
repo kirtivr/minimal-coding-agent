@@ -3,12 +3,11 @@
 import os
 import sys
 import json
-import time
 import logging
-import requests
 
 from prompts import SYSTEM_PROMPT
 from tools import TOOL_SCHEMAS, dispatch
+from llm import call_openrouter
 
 
 LOGGER = logging.getLogger("coding_agent")
@@ -83,55 +82,14 @@ def get_config():
     return api_key, model
 
 
-def call_openrouter(messages: list, tools: list, api_key: str, model: str) -> dict:
-    """Call the OpenRouter chat completions API with retry on 5xx errors."""
-    payload = {
-        "model": model,
-        "messages": messages,
-        "tools": tools,
-    }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    for attempt in range(3):
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=120,
-        )
-        if response.status_code >= 500 and attempt < 2:
-            backoff_seconds = 2 ** attempt
-            LOGGER.warning(
-                "Server error (%s), retrying attempt %s/3 in %ss",
-                response.status_code,
-                attempt + 1,
-                backoff_seconds,
-            )
-            time.sleep(backoff_seconds)
-            continue
-        break
-
-    if response.status_code != 200:
-        raise Exception(
-            f"API error {response.status_code}: {response.text[:500]}"
-        )
-    data = response.json()
-    if "error" in data:
-        raise Exception(f"API error: {data['error']}")
-    return data
-
-
-def process_tool_calls(tool_calls: list) -> list:
+def process_tool_calls(tool_calls: list, api_key: str, model: str) -> list:
     """Execute tool calls and return tool result messages."""
     results = []
     for tc in tool_calls:
         name = tc["function"]["name"]
         args = tc["function"].get("arguments", "{}")
         LOGGER.info("🔧 %s(%s%s)", name, args[:80], "..." if len(args) > 80 else "")
-        output = dispatch(name, args)
+        output = dispatch(name, args, context={"api_key": api_key, "model": model})
         results.append({
             "role": "tool",
             "tool_call_id": tc["id"],
@@ -186,7 +144,7 @@ def agent_loop():
             tool_calls = msg.get("tool_calls")
             if tool_calls:
                 LOGGER.info("Processing %d tool call(s).", len(tool_calls))
-                tool_results = process_tool_calls(tool_calls)
+                tool_results = process_tool_calls(tool_calls, api_key, model)
                 messages.extend(tool_results)
                 continue  # Loop back for the model's next response
 

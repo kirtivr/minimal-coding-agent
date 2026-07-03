@@ -3,6 +3,7 @@
 import os
 import json
 from sandbox import run_command as sandbox_run
+from llm import call_openrouter
 
 # --- Tool Schemas (OpenAI function-calling format) ---
 
@@ -101,6 +102,27 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_subagent",
+            "description": "Run a subagent with a specific role to perform a delegated task such as research, monitoring, or interaction.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The task description for the subagent to execute",
+                    },
+                    "role": {
+                        "type": "string",
+                        "description": "The role of the subagent (e.g. researcher, monitor, interactors)",
+                    },
+                },
+                "required": ["task", "role"],
             },
         },
     },
@@ -208,9 +230,43 @@ def search_files(pattern: str, path: str = ".") -> str:
     return "\n".join(matches)
 
 
+def run_subagent(task: str, role: str, context: dict = None) -> str:
+    """Run a subagent with a specific role to perform a delegated task.
+
+    Uses call_openrouter from llm.py to execute the subagent task and returns
+    the subagent's response text.
+    """
+    if context is None:
+        return "Error: run_subagent requires a context with api_key and model"
+
+    api_key = context.get("api_key")
+    model = context.get("model")
+    if not api_key or not model:
+        return "Error: run_subagent requires both api_key and model in context"
+
+    system_prompt = (
+        f"You are a subagent with the role: {role}. "
+        f"Complete the following task concisely and accurately."
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": task},
+    ]
+
+    try:
+        response = call_openrouter(messages=messages, tools=None, api_key=api_key, model=model)
+    except Exception as e:
+        return f"Error running subagent: {e}"
+
+    try:
+        return response["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as e:
+        return f"Error parsing subagent response: {e}"
+
+
 # --- Dispatch ---
 
-def dispatch(name: str, args_json: str) -> str:
+def dispatch(name: str, args_json: str, context: dict = None) -> str:
     """Dispatch a tool call by name, parsing the JSON arguments."""
     try:
         args = json.loads(args_json) if args_json else {}
@@ -218,12 +274,12 @@ def dispatch(name: str, args_json: str) -> str:
         return f"Error: Invalid JSON arguments: {args_json}"
 
     try:
-        return _dispatch(name, args)
+        return _dispatch(name, args, context=context)
     except KeyError as e:
         return f"Error: Missing required argument {e} for tool '{name}'"
 
 
-def _dispatch(name: str, args: dict) -> str:
+def _dispatch(name: str, args: dict, context: dict = None) -> str:
     if name == "read_file":
         return read_file(args["path"])
     elif name == "write_file":
@@ -234,5 +290,7 @@ def _dispatch(name: str, args: dict) -> str:
         return list_directory(args.get("path", "."))
     elif name == "search_files":
         return search_files(args["pattern"], args.get("path", "."))
+    elif name == "run_subagent":
+        return run_subagent(args["task"], args["role"], context=context)
     else:
         return f"Error: Unknown tool '{name}'"
