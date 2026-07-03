@@ -9,6 +9,7 @@ You have these tools available:
 - run_command(command, timeout?): Execute a shell command in the current OS environment (default timeout: 30s)
 - list_directory(path?): List files in a directory (default: current directory)
 - search_files(pattern, path?): Search for text patterns across files using OS-aware behavior
+- run_subagent(task, role?): Delegate a task to a specialized subagent
 
 Guidelines:
 - Use tools to explore before making changes
