@@ -128,15 +128,22 @@ def process_tool_calls(tool_calls: list) -> list:
     """Execute tool calls and return tool result messages."""
     results = []
     for tc in tool_calls:
-        name = tc["function"]["name"]
-        args = tc["function"].get("arguments", "{}")
-        LOGGER.info("🔧 %s(%s%s)", name, args[:80], "..." if len(args) > 80 else "")
-        output = dispatch(name, args)
-        results.append({
-            "role": "tool",
-            "tool_call_id": tc["id"],
-            "content": output,
-        })
+        try:
+            name = tc.get("function", {}).get("name")
+            if not name:
+                LOGGER.warning("Skipping malformed tool call: missing function name. Payload: %s", tc)
+                continue
+            args = tc.get("function", {}).get("arguments", "{}")
+            LOGGER.info("🔧 %s(%s%s)", name, args[:80], "..." if len(args) > 80 else "")
+            output = dispatch(name, args)
+            results.append({
+                "role": "tool",
+                "tool_call_id": tc.get("id", ""),
+                "content": output,
+            })
+        except KeyError as e:
+            LOGGER.warning("Skipping malformed tool call due to missing key %s. Payload: %s", e, tc)
+            continue
     return results
 
 

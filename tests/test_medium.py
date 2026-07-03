@@ -311,6 +311,29 @@ class TestLoggingConfig(unittest.TestCase):
         with open(log_path, "r", encoding="utf-8") as f:
             content = f.read()
         self.assertIn("🔧 read_file", content)
+    def test_process_tool_calls_malformed_payloads(self):
+        """process_tool_calls should not raise KeyError on malformed payloads."""
+        setup_logging(log_file=os.path.join(self.tmpdir, "agent-malformed.log"),
+                      log_level="INFO", console_enabled=False)
+
+        malformed_calls = [
+            # Missing 'function' key entirely
+            {"id": "call_1"},
+            # 'function' present but missing 'name'
+            {"id": "call_2", "function": {"arguments": "{}"}},
+            # Missing 'id' key
+            {"function": {"name": "read_file", "arguments": "{}"}},
+        ]
+
+        with unittest.mock.patch("agent.dispatch", return_value="tool output"):
+            # Should not raise KeyError
+            result = process_tool_calls(malformed_calls)
+
+        # First two malformed calls (missing function/name) are skipped;
+        # the third (missing id) is still processed.
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["content"], "tool output")
+        self.assertEqual(result[0]["tool_call_id"], "")
 
 
 # ---------------------------------------------------------------------------
