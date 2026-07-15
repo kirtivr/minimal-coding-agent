@@ -313,6 +313,25 @@ class TestLoggingConfig(unittest.TestCase):
         self.assertIn("🔧 read_file", content)
 
 
+    def test_process_tool_calls_malformed_payloads(self):
+        """Malformed tool call payloads should not crash; one result per input."""
+        malformed_calls = [
+            None,
+            {"id": "call_1", "function": {"arguments": "{}"}},
+            {"id": "call_2"},
+            {"function": {"name": "read_file", "arguments": "{}"}},
+        ]
+
+        with unittest.mock.patch("agent.dispatch", return_value="tool output"):
+            result = process_tool_calls(malformed_calls)
+
+        self.assertEqual(len(result), len(malformed_calls))
+        for entry in result:
+            self.assertEqual(entry["role"], "tool")
+            self.assertIn("tool_call_id", entry)
+            self.assertEqual(entry["content"], "Error: malformed tool call skipped")
+
+
 # ---------------------------------------------------------------------------
 # Config / dotenv
 # ---------------------------------------------------------------------------
