@@ -124,27 +124,39 @@ def call_openrouter(messages: list, tools: list, api_key: str, model: str) -> di
     return data
 
 
+def _process_single_tool_call(tc):
+    """Validate and execute a single tool call, returning a tool result or None."""
+    func = tc.get("function")
+    if not func:
+        LOGGER.warning("Malformed tool call: missing 'function' field.")
+        return None
+
+    name = func.get("name")
+    if not name:
+        LOGGER.warning("Malformed tool call: missing 'name' in function.")
+        return None
+
+    args = func.get("arguments", "{}")
+    tool_call_id = tc.get("id")
+    if not tool_call_id:
+        LOGGER.warning("Malformed tool call: missing 'id' field.")
+        return None
+
+    LOGGER.info("🔧 %s(%s%s)", name, args[:80], "..." if len(args) > 80 else "")
+    output = dispatch(name, args)
+    return {
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "content": output,
+    }
+
 def process_tool_calls(tool_calls: list) -> list:
     """Execute tool calls and return tool result messages."""
     results = []
     for tc in tool_calls:
-        function_info = tc.get("function")
-        if not isinstance(function_info, dict) or "name" not in function_info:
-            LOGGER.warning("Skipping malformed tool call: missing or invalid 'function' field.")
-            continue
-        name = function_info["name"]
-        args = function_info.get("arguments", "{}")
-        tool_call_id = tc.get("id")
-        if not tool_call_id:
-            LOGGER.warning("Skipping malformed tool call: missing 'id' field.")
-            continue
-        LOGGER.info("🔧 %s(%s%s)", name, args[:80], "..." if len(args) > 80 else "")
-        output = dispatch(name, args)
-        results.append({
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "content": output,
-        })
+        result = _process_single_tool_call(tc)
+        if result is not None:
+            results.append(result)
     return results
 
 
