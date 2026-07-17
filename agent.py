@@ -2,9 +2,11 @@
 
 import os
 import sys
+import json
+import time
 import logging
+import requests
 
-from api_client import call_openrouter
 from prompts import SYSTEM_PROMPT
 from tools import TOOL_SCHEMAS, dispatch
 from subagents import SubagentManager
@@ -82,6 +84,52 @@ def get_config():
     return api_key, model
 
 
+def call_openrouter(messages: list, tools: list, api_key: str, model: str) -> dict:
+    """Call the OpenRouter chat completions API with retry on 5xx errors."""
+    payload = {
+        "model": model,
+        "messages": messages,
+        "tools": tools,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    for attempt in range(3):
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=120,
+        )
+        if response.status_code >= 500 and attempt < 2:
+            backoff_seconds = 2 ** attempt
+            LOGGER.warning(
+                "Server error (%s), retrying attempt %s/3 in %ss",
+                response.status_code,
+                attempt + 1,
+                backoff_seconds,
+            )
+            time.sleep(backoff_seconds)
+            continue
+        break
+
+    if response.status_code != 200:
+        raise Exception(
+            f"API error {response.status_code}: {response.text[:500]}"
+        )
+    data = response.json()
+    if "error" in data:
+        raise Exception(f"API error: {data['error']}")
+    return data
+
+
+def create_subagent_manager(api_key: str, model: str) -> SubagentManager:
+    """Create and return a SubagentManager instance."""
+    return SubagentManager(api_key, model)
+
+
 def process_tool_calls(tool_calls: list) -> list:
     """Execute tool calls and return tool result messages."""
     results = []
@@ -101,7 +149,7 @@ def process_tool_calls(tool_calls: list) -> list:
 def agent_loop():
     """Main agent loop: read input, call API, handle tool calls, repeat."""
     api_key, model = get_config()
-    subagent_manager = SubagentManager(api_key, model)
+    subagent_manager = create_subagent_manager(api_key, model)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     LOGGER.info("Coding Agent started (model: %s)", model)
@@ -115,7 +163,6 @@ def agent_loop():
         except (KeyboardInterrupt, EOFError):
             LOGGER.info("Session interrupted by user.")
             print("\nGoodbye!")
-            subagent_manager.shutdown()
             break
 
         if not user_input:
@@ -123,7 +170,6 @@ def agent_loop():
         if user_input.lower() in ("/quit", "/exit", "quit", "exit"):
             LOGGER.info("Session ended by user command.")
             print("Goodbye!")
-            subagent_manager.shutdown()
             break
 
         messages.append({"role": "user", "content": user_input})
