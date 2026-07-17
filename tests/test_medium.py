@@ -312,6 +312,24 @@ class TestLoggingConfig(unittest.TestCase):
             content = f.read()
         self.assertIn("🔧 read_file", content)
 
+    def test_process_tool_calls_missing_function_key(self):
+        tool_calls = [{"id": "call_1"}]
+        result = process_tool_calls(tool_calls)
+        self.assertEqual(result, [])
+
+    def test_process_tool_calls_missing_name_in_function(self):
+        tool_calls = [{"id": "call_1", "function": {"arguments": "{}"}}]
+        result = process_tool_calls(tool_calls)
+        self.assertEqual(result, [])
+
+    def test_process_tool_calls_missing_id(self):
+        tool_calls = [{"function": {"name": "read_file", "arguments": "{}"}}]
+        result = process_tool_calls(tool_calls)
+        self.assertEqual(result, [])
+
+    def test_process_tool_calls_empty_list(self):
+        result = process_tool_calls([])
+        self.assertEqual(result, [])
 
 # ---------------------------------------------------------------------------
 # Config / dotenv

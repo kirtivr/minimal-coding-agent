@@ -128,13 +128,21 @@ def process_tool_calls(tool_calls: list) -> list:
     """Execute tool calls and return tool result messages."""
     results = []
     for tc in tool_calls:
-        name = tc["function"]["name"]
-        args = tc["function"].get("arguments", "{}")
+        function_info = tc.get("function")
+        if not isinstance(function_info, dict) or "name" not in function_info:
+            LOGGER.warning("Skipping malformed tool call: missing or invalid 'function' field.")
+            continue
+        name = function_info["name"]
+        args = function_info.get("arguments", "{}")
+        tool_call_id = tc.get("id")
+        if not tool_call_id:
+            LOGGER.warning("Skipping malformed tool call: missing 'id' field.")
+            continue
         LOGGER.info("🔧 %s(%s%s)", name, args[:80], "..." if len(args) > 80 else "")
         output = dispatch(name, args)
         results.append({
             "role": "tool",
-            "tool_call_id": tc["id"],
+            "tool_call_id": tool_call_id,
             "content": output,
         })
     return results
