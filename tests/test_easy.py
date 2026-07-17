@@ -21,7 +21,7 @@ class TestSystemPrompt(unittest.TestCase):
         self.assertTrue(len(SYSTEM_PROMPT) > 100)
 
     def test_prompt_mentions_tools(self):
-        for tool in ["read_file", "write_file", "run_command", "list_directory", "search_files"]:
+        for tool in ["read_file", "write_file", "run_command", "list_directory", "search_files", "spawn_subagent", "get_subagent_status", "list_subagents"]:
             self.assertIn(tool, SYSTEM_PROMPT)
 
 
@@ -29,7 +29,7 @@ class TestToolSchemas(unittest.TestCase):
     """Verify tool schemas are valid OpenAI function-calling format."""
 
     def test_schema_count(self):
-        self.assertEqual(len(TOOL_SCHEMAS), 5)
+        self.assertEqual(len(TOOL_SCHEMAS), 8)
 
     def test_schema_structure(self):
         for schema in TOOL_SCHEMAS:
@@ -40,7 +40,7 @@ class TestToolSchemas(unittest.TestCase):
 
     def test_schema_names(self):
         names = {s["function"]["name"] for s in TOOL_SCHEMAS}
-        expected = {"read_file", "write_file", "run_command", "list_directory", "search_files"}
+        expected = {"read_file", "write_file", "run_command", "list_directory", "search_files", "spawn_subagent", "get_subagent_status", "list_subagents"}
         self.assertEqual(names, expected)
 
 

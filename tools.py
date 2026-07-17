@@ -104,6 +104,65 @@ TOOL_SCHEMAS = [
             },
         },
     },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_subagent",
+            "description": "Spawn a background subagent to perform a specialized task in parallel.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_type": {
+                        "type": "string",
+                        "description": "Type of subagent: research, monitoring, or interacting",
+                    },
+                    "task": {
+                        "type": "string",
+                        "description": "Task description for the subagent",
+                    },
+                    "api_key": {
+                        "type": "string",
+                        "description": "API key for the LLM backend",
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Model name for the LLM backend",
+                    },
+                },
+                "required": ["agent_type", "task", "api_key", "model"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_subagent_status",
+            "description": "Get the current status and result of a subagent by its ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "ID of the subagent to query",
+                    },
+                },
+                "required": ["agent_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_subagents",
+            "description": "List all subagents and their current statuses.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
 ]
 
 # --- Tool Implementations ---
@@ -234,5 +293,26 @@ def _dispatch(name: str, args: dict) -> str:
         return list_directory(args.get("path", "."))
     elif name == "search_files":
         return search_files(args["pattern"], args.get("path", "."))
+    elif name == "spawn_subagent":
+        from subagents import SubagentManager
+        manager = SubagentManager()
+        try:
+            agent_id = manager.spawn(
+                args["agent_type"], args["task"], args["api_key"], args["model"]
+            )
+            return f"Spawned subagent {agent_id}"
+        except ValueError as e:
+            return f"Error: {e}"
+    elif name == "get_subagent_status":
+        from subagents import SubagentManager
+        manager = SubagentManager()
+        subagent = manager.get(args["agent_id"])
+        if subagent is None:
+            return f"Error: Subagent '{args['agent_id']}' not found"
+        return json.dumps(subagent.to_dict())
+    elif name == "list_subagents":
+        from subagents import SubagentManager
+        manager = SubagentManager()
+        return json.dumps(manager.list_all())
     else:
         return f"Error: Unknown tool '{name}'"
