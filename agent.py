@@ -7,9 +7,8 @@ import time
 import logging
 import requests
 
-from prompts import SYSTEM_PROMPT, SUBAGENT_PROMPT
-from tools import TOOL_SCHEMAS, dispatch, set_subagent_manager
-from subagents import SubagentManager
+from prompts import SYSTEM_PROMPT
+from tools import TOOL_SCHEMAS, dispatch
 
 
 LOGGER = logging.getLogger("coding_agent")
@@ -141,52 +140,23 @@ def process_tool_calls(tool_calls: list) -> list:
     return results
 
 
-def run_agent_turn(messages: list, api_key: str, model: str) -> str:
-    """Run a single agent turn, handling any tool calls, and return the final text response."""
-    while True:
-        try:
-            data = call_openrouter(messages, TOOL_SCHEMAS, api_key, model)
-        except Exception as e:
-            LOGGER.exception("OpenRouter call failed")
-            return f"Error: {e}"
+def init_subagent_manager(api_key: str, model: str):
+    """Create the SubagentManager and wire it with the subagent task runner.
 
-        choice = data["choices"][0]
-        msg = choice["message"]
+    Instantiates the SubagentManager, registers it as the active manager via
+    set_subagent_manager so that run_subagent_task can dispatch delegated work,
+    and returns the manager instance for direct use by the caller.
+    """
+    manager = SubagentManager(api_key=api_key, model=model)
+    set_subagent_manager(manager)
+    return manager
 
-        # Add assistant message to history
-        messages.append(msg)
-
-        # Check for tool calls
-        tool_calls = msg.get("tool_calls")
-        if tool_calls:
-            LOGGER.info("Processing %d tool call(s).", len(tool_calls))
-            tool_results = process_tool_calls(tool_calls)
-            messages.extend(tool_results)
-            continue  # Loop back for the model's next response
-
-        # Text response
-        if msg.get("content"):
-            LOGGER.info("Agent response sent to user.")
-            return msg["content"]
-        return ""
-
-
-def run_subagent_task(task_description: str, api_key: str, model: str) -> str:
-    """Create a subagent message thread and run an agent turn for the given task."""
-    messages = [
-        {"role": "system", "content": SUBAGENT_PROMPT},
-        {"role": "user", "content": task_description},
-    ]
-    return run_agent_turn(messages, api_key, model)
 
 def agent_loop():
     """Main agent loop: read input, call API, handle tool calls, repeat."""
     api_key, model = get_config()
+    init_subagent_manager(api_key, model)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-    # Initialize subagent manager with the subagent task runner
-    manager = SubagentManager(lambda task_desc: run_subagent_task(task_desc, api_key, model))
-    set_subagent_manager(manager)
 
     LOGGER.info("Coding Agent started (model: %s)", model)
     print(f"Coding Agent (model: {model})")
@@ -211,11 +181,33 @@ def agent_loop():
         messages.append({"role": "user", "content": user_input})
 
         # Agent turn: may loop if there are tool calls
-        response = run_agent_turn(messages, api_key, model)
-        if response.startswith("Error: "):
-            print(f"\n{response}\n")
-        elif response:
-            print(f"\nAgent: {response}\n")
+        while True:
+            try:
+                data = call_openrouter(messages, TOOL_SCHEMAS, api_key, model)
+            except Exception as e:
+                LOGGER.exception("OpenRouter call failed")
+                print(f"\nError: {e}")
+                break
+
+            choice = data["choices"][0]
+            msg = choice["message"]
+
+            # Add assistant message to history
+            messages.append(msg)
+
+            # Check for tool calls
+            tool_calls = msg.get("tool_calls")
+            if tool_calls:
+                LOGGER.info("Processing %d tool call(s).", len(tool_calls))
+                tool_results = process_tool_calls(tool_calls)
+                messages.extend(tool_results)
+                continue  # Loop back for the model's next response
+
+            # Text response — print and break to get next user input
+            if msg.get("content"):
+                LOGGER.info("Agent response sent to user.")
+                print(f"\nAgent: {msg['content']}\n")
+            break
 
 
 if __name__ == "__main__":
