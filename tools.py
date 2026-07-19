@@ -3,6 +3,17 @@
 import os
 import json
 from sandbox import run_command as sandbox_run
+from subagents import SubagentManager
+
+# --- Subagent Manager Reference ---
+
+SUBAGENT_MANAGER = None
+
+
+def set_subagent_manager(manager: SubagentManager) -> None:
+    """Set the module-level subagent manager so agent.py can inject it."""
+    global SUBAGENT_MANAGER
+    SUBAGENT_MANAGER = manager
 
 # --- Tool Schemas (OpenAI function-calling format) ---
 
@@ -101,6 +112,98 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_subagent",
+            "description": "Spawn a subagent to perform a task in the background.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_description": {
+                        "type": "string",
+                        "description": "Description of the task for the subagent",
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": "Optional shell command for the subagent to execute",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Timeout in seconds for the command (default: 30)",
+                    },
+                },
+                "required": ["task_description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_subagent_status",
+            "description": "Get the status of a subagent by its ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "subagent_id": {
+                        "type": "string",
+                        "description": "The unique ID of the subagent",
+                    }
+                },
+                "required": ["subagent_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "wait_for_subagent",
+            "description": "Wait for a subagent to finish.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "subagent_id": {
+                        "type": "string",
+                        "description": "The unique ID of the subagent",
+                    },
+                    "timeout": {
+                        "type": "number",
+                        "description": "Maximum time to wait in seconds (default: 30)",
+                    },
+                },
+                "required": ["subagent_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_subagents",
+            "description": "List all active and completed subagent IDs.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_subagent_result",
+            "description": "Get the result, status, and any error from a subagent.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "subagent_id": {
+                        "type": "string",
+                        "description": "The unique ID of the subagent",
+                    }
+                },
+                "required": ["subagent_id"],
             },
         },
     },
@@ -234,5 +337,41 @@ def _dispatch(name: str, args: dict) -> str:
         return list_directory(args.get("path", "."))
     elif name == "search_files":
         return search_files(args["pattern"], args.get("path", "."))
+    elif name == "spawn_subagent":
+        if SUBAGENT_MANAGER is None:
+            return "Error: Subagent manager not initialized"
+        task_desc = args["task_description"]
+        command = args.get("command")
+        if command:
+            timeout = args.get("timeout", 30)
+            task = lambda: sandbox_run(command, timeout)
+        elif SUBAGENT_MANAGER.task_runner is not None:
+            task = lambda: SUBAGENT_MANAGER.task_runner(task_desc)
+        else:
+            task = lambda: task_desc
+        subagent_id = SUBAGENT_MANAGER.spawn(task, task_desc)
+        return f"Spawned subagent {subagent_id}"
+    elif name == "get_subagent_status":
+        if SUBAGENT_MANAGER is None:
+            return "Error: Subagent manager not initialized"
+        status = SUBAGENT_MANAGER.get_status(args["subagent_id"])
+        return status or "unknown"
+    elif name == "wait_for_subagent":
+        if SUBAGENT_MANAGER is None:
+            return "Error: Subagent manager not initialized"
+        finished = SUBAGENT_MANAGER.wait_for(
+            args["subagent_id"], timeout=args.get("timeout", 30)
+        )
+        return "Finished" if finished else "Timeout"
+    elif name == "list_subagents":
+        if SUBAGENT_MANAGER is None:
+            return "Error: Subagent manager not initialized"
+        ids = SUBAGENT_MANAGER.list_subagents()
+        return json.dumps(ids) if ids else "No subagents"
+    elif name == "get_subagent_result":
+        if SUBAGENT_MANAGER is None:
+            return "Error: Subagent manager not initialized"
+        result = SUBAGENT_MANAGER.get_result(args["subagent_id"])
+        return json.dumps(result)
     else:
         return f"Error: Unknown tool '{name}'"
