@@ -127,14 +127,50 @@ def call_openrouter(messages: list, tools: list, api_key: str, model: str) -> di
 def process_tool_calls(tool_calls: list) -> list:
     """Execute tool calls and return tool result messages."""
     results = []
+    if not isinstance(tool_calls, list):
+        LOGGER.warning("Malformed tool_calls payload (not a list): %r", tool_calls)
+        return results
+
     for tc in tool_calls:
-        name = tc["function"]["name"]
-        args = tc["function"].get("arguments", "{}")
+        if not isinstance(tc, dict):
+            LOGGER.warning("Skipping malformed tool call (not a dict): %r", tc)
+            continue
+
+        tc_id = tc.get("id")
+        function = tc.get("function")
+        if not isinstance(function, dict):
+            if tc_id:
+                results.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": "Error: malformed tool call, missing function object",
+                })
+            else:
+                LOGGER.warning("Skipping malformed tool call (missing id and function): %r", tc)
+            continue
+
+        name = function.get("name")
+        if not name:
+            if tc_id:
+                results.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": "Error: malformed tool call, missing function name",
+                })
+            else:
+                LOGGER.warning("Skipping malformed tool call (missing id and function name): %r", tc)
+            continue
+
+        if not tc_id:
+            LOGGER.warning("Skipping malformed tool call (missing id): %r", tc)
+            continue
+
+        args = function.get("arguments", "{}")
         LOGGER.info("🔧 %s(%s%s)", name, args[:80], "..." if len(args) > 80 else "")
         output = dispatch(name, args)
         results.append({
             "role": "tool",
-            "tool_call_id": tc["id"],
+            "tool_call_id": tc_id,
             "content": output,
         })
     return results
