@@ -125,16 +125,25 @@ def call_openrouter(messages: list, tools: list, api_key: str, model: str) -> di
 
 
 def process_tool_calls(tool_calls: list) -> list:
-    """Execute tool calls and return tool result messages."""
+    """Execute tool calls and return tool result messages.
+
+    Malformed tool-call payloads (missing 'function', 'name', or 'id')
+    are skipped with a warning so valid calls continue to execute.
+    """
     results = []
     for tc in tool_calls:
-        name = tc["function"]["name"]
-        args = tc["function"].get("arguments", "{}")
+        try:
+            name = tc["function"]["name"]
+            args = tc["function"].get("arguments", "{}")
+            tool_call_id = tc["id"]
+        except (KeyError, TypeError) as e:
+            LOGGER.warning("Skipping malformed tool call payload: %s", e)
+            continue
         LOGGER.info("🔧 %s(%s%s)", name, args[:80], "..." if len(args) > 80 else "")
         output = dispatch(name, args)
         results.append({
             "role": "tool",
-            "tool_call_id": tc["id"],
+            "tool_call_id": tool_call_id,
             "content": output,
         })
     return results
