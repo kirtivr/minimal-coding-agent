@@ -136,6 +136,9 @@ def _try_extract_tool_call(tc):
     except (KeyError, TypeError) as e:
         LOGGER.warning("Skipping malformed tool call payload: %s", e)
         return None
+    if not isinstance(args, str):
+        LOGGER.warning("Skipping malformed tool call payload: arguments is not a string")
+        return None
     return name, args, tool_call_id
 
 
