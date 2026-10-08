@@ -124,6 +124,21 @@ def call_openrouter(messages: list, tools: list, api_key: str, model: str) -> di
     return data
 
 
+def _try_extract_tool_call(tc):
+    """Extract (name, args, tool_call_id) from a tool-call payload.
+
+    Returns None and logs a warning when the payload is malformed.
+    """
+    try:
+        name = tc["function"]["name"]
+        args = tc["function"].get("arguments", "{}")
+        tool_call_id = tc["id"]
+    except (KeyError, TypeError) as e:
+        LOGGER.warning("Skipping malformed tool call payload: %s", e)
+        return None
+    return name, args, tool_call_id
+
+
 def process_tool_calls(tool_calls: list) -> list:
     """Execute tool calls and return tool result messages.
 
@@ -132,13 +147,10 @@ def process_tool_calls(tool_calls: list) -> list:
     """
     results = []
     for tc in tool_calls:
-        try:
-            name = tc["function"]["name"]
-            args = tc["function"].get("arguments", "{}")
-            tool_call_id = tc["id"]
-        except (KeyError, TypeError) as e:
-            LOGGER.warning("Skipping malformed tool call payload: %s", e)
+        extracted = _try_extract_tool_call(tc)
+        if extracted is None:
             continue
+        name, args, tool_call_id = extracted
         LOGGER.info("🔧 %s(%s%s)", name, args[:80], "..." if len(args) > 80 else "")
         output = dispatch(name, args)
         results.append({
