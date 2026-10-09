@@ -314,6 +314,103 @@ class TestLoggingConfig(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# process_tool_calls malformed payload handling
+# ---------------------------------------------------------------------------
+
+class TestProcessToolCallsMalformed(unittest.TestCase):
+    """Malformed tool-call payloads should be skipped, not crash the agent."""
+
+    def test_process_tool_calls_malformed_payloads(self):
+        """Missing 'function', missing 'name', and missing 'id' are skipped;
+        valid calls in the same batch still execute."""
+        tool_calls = [
+            # Missing 'function' key entirely
+            {"id": "call_bad_1"},
+            # 'function' dict missing 'name'
+            {
+                "id": "call_bad_2",
+                "function": {"arguments": "{}"},
+            },
+            # Missing 'id' key
+            {
+                "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "sample.txt"}),
+                },
+            },
+            # Valid call that should still execute
+            {
+                "id": "call_good",
+                "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "sample.txt"}),
+                },
+            },
+        ]
+
+        with unittest.mock.patch("agent.dispatch", return_value="tool output"):
+            result = process_tool_calls(tool_calls)
+
+        # Only the valid call should appear in results
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["tool_call_id"], "call_good")
+        self.assertEqual(result[0]["content"], "tool output")
+
+    def test_process_tool_calls_non_string_arguments(self):
+        """Non-string function.arguments (None, int, list, dict) are skipped;
+        valid calls in the same batch still execute."""
+        tool_calls = [
+            # arguments is None
+            {
+                "id": "call_none",
+                "function": {
+                    "name": "read_file",
+                    "arguments": None,
+                },
+            },
+            # arguments is an integer
+            {
+                "id": "call_int",
+                "function": {
+                    "name": "read_file",
+                    "arguments": 42,
+                },
+            },
+            # arguments is a list
+            {
+                "id": "call_list",
+                "function": {
+                    "name": "read_file",
+                    "arguments": ["path", "sample.txt"],
+                },
+            },
+            # arguments is a dict (not JSON-serialized)
+            {
+                "id": "call_dict",
+                "function": {
+                    "name": "read_file",
+                    "arguments": {"path": "sample.txt"},
+                },
+            },
+            # Valid call that should still execute
+            {
+                "id": "call_good",
+                "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "sample.txt"}),
+                },
+            },
+        ]
+
+        with unittest.mock.patch("agent.dispatch", return_value="tool output"):
+            result = process_tool_calls(tool_calls)
+
+        # Only the valid call should appear in results
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["tool_call_id"], "call_good")
+        self.assertEqual(result[0]["content"], "tool output")
+
+# ---------------------------------------------------------------------------
 # Config / dotenv
 # ---------------------------------------------------------------------------
 
