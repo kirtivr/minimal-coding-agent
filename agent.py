@@ -131,6 +131,16 @@ def process_tool_calls(tool_calls: list) -> list:
         try:
             name = tc["function"]["name"]
             args = tc["function"].get("arguments", "{}")
+            # Validate that arguments decode to a JSON object before dispatch,
+            # so malformed payloads are skipped instead of aborting the batch.
+            try:
+                decoded_args = json.loads(args) if isinstance(args, str) else args
+            except json.JSONDecodeError:
+                LOGGER.warning("Skipping malformed tool call payload (invalid JSON arguments): %s", tc)
+                continue
+            if not isinstance(decoded_args, dict):
+                LOGGER.warning("Skipping malformed tool call payload (non-object arguments): %s", tc)
+                continue
             LOGGER.info("🔧 %s(%s%s)", name, args[:80], "..." if len(args) > 80 else "")
             output = dispatch(name, args)
             results.append({
