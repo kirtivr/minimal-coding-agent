@@ -312,6 +312,210 @@ class TestLoggingConfig(unittest.TestCase):
             content = f.read()
         self.assertIn("🔧 read_file", content)
 
+    def test_process_tool_calls_skips_missing_function_key(self):
+        """A tool-call entry missing the `function` key is skipped; valid entry still processed."""
+        log_path = os.path.join(self.tmpdir, "agent-malformed-function.log")
+        setup_logging(log_file=log_path, log_level="INFO", console_enabled=False)
+
+        tool_calls = [
+            {"id": "call_malformed"},
+            {
+                "id": "call_valid",
+                "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "sample.txt"}),
+                },
+            },
+        ]
+
+        with unittest.mock.patch("agent.dispatch", return_value="valid output"):
+            result = process_tool_calls(tool_calls)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["content"], "valid output")
+        self.assertEqual(result[0]["tool_call_id"], "call_valid")
+
+        for handler in LOGGER.handlers:
+            if hasattr(handler, "flush"):
+                handler.flush()
+
+        with open(log_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("Skipping malformed tool call payload", content)
+
+    def test_process_tool_calls_skips_missing_name(self):
+        """A tool-call entry whose `function` dict lacks `name` is skipped; valid entry still processed."""
+        log_path = os.path.join(self.tmpdir, "agent-malformed-name.log")
+        setup_logging(log_file=log_path, log_level="INFO", console_enabled=False)
+
+        tool_calls = [
+            {"id": "call_malformed", "function": {"arguments": "{}"}},
+            {
+                "id": "call_valid",
+                "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "sample.txt"}),
+                },
+            },
+        ]
+
+        with unittest.mock.patch("agent.dispatch", return_value="valid output"):
+            result = process_tool_calls(tool_calls)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["content"], "valid output")
+        self.assertEqual(result[0]["tool_call_id"], "call_valid")
+
+        for handler in LOGGER.handlers:
+            if hasattr(handler, "flush"):
+                handler.flush()
+
+        with open(log_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("Skipping malformed tool call payload", content)
+
+    def test_process_tool_calls_skips_missing_id(self):
+        """A tool-call entry missing the `id` field is skipped; valid entry still processed."""
+        log_path = os.path.join(self.tmpdir, "agent-malformed-id.log")
+        setup_logging(log_file=log_path, log_level="INFO", console_enabled=False)
+
+        tool_calls = [
+            {"function": {"name": "read_file", "arguments": json.dumps({"path": "sample.txt"})}},
+            {
+                "id": "call_valid",
+                "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "sample.txt"}),
+                },
+            },
+        ]
+
+        with unittest.mock.patch("agent.dispatch", return_value="valid output"):
+            result = process_tool_calls(tool_calls)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["content"], "valid output")
+        self.assertEqual(result[0]["tool_call_id"], "call_valid")
+
+        for handler in LOGGER.handlers:
+            if hasattr(handler, "flush"):
+                handler.flush()
+
+        with open(log_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("Skipping malformed tool call payload", content)
+
+    def test_process_tool_calls_skips_null_arguments(self):
+        """A tool-call entry whose arguments decode to `null` is skipped; valid entry still processed."""
+        log_path = os.path.join(self.tmpdir, "agent-malformed-null.log")
+        setup_logging(log_file=log_path, log_level="INFO", console_enabled=False)
+
+        tool_calls = [
+            {
+                "id": "call_malformed",
+                "function": {
+                    "name": "read_file",
+                    "arguments": "null",
+                },
+            },
+            {
+                "id": "call_valid",
+                "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "sample.txt"}),
+                },
+            },
+        ]
+
+        with unittest.mock.patch("agent.dispatch", return_value="valid output"):
+            result = process_tool_calls(tool_calls)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["content"], "valid output")
+        self.assertEqual(result[0]["tool_call_id"], "call_valid")
+
+        for handler in LOGGER.handlers:
+            if hasattr(handler, "flush"):
+                handler.flush()
+
+        with open(log_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("Skipping malformed tool call payload", content)
+
+    def test_process_tool_calls_skips_array_arguments(self):
+        """A tool-call entry whose arguments decode to `[]` is skipped; valid entry still processed."""
+        log_path = os.path.join(self.tmpdir, "agent-malformed-array.log")
+        setup_logging(log_file=log_path, log_level="INFO", console_enabled=False)
+
+        tool_calls = [
+            {
+                "id": "call_malformed",
+                "function": {
+                    "name": "read_file",
+                    "arguments": "[]",
+                },
+            },
+            {
+                "id": "call_valid",
+                "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "sample.txt"}),
+                },
+            },
+        ]
+
+        with unittest.mock.patch("agent.dispatch", return_value="valid output"):
+            result = process_tool_calls(tool_calls)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["content"], "valid output")
+        self.assertEqual(result[0]["tool_call_id"], "call_valid")
+
+        for handler in LOGGER.handlers:
+            if hasattr(handler, "flush"):
+                handler.flush()
+
+        with open(log_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("Skipping malformed tool call payload", content)
+
+    def test_process_tool_calls_skips_number_arguments(self):
+        """A tool-call entry whose arguments decode to `42` is skipped; valid entry still processed."""
+        log_path = os.path.join(self.tmpdir, "agent-malformed-number.log")
+        setup_logging(log_file=log_path, log_level="INFO", console_enabled=False)
+
+        tool_calls = [
+            {
+                "id": "call_malformed",
+                "function": {
+                    "name": "read_file",
+                    "arguments": "42",
+                },
+            },
+            {
+                "id": "call_valid",
+                "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "sample.txt"}),
+                },
+            },
+        ]
+
+        with unittest.mock.patch("agent.dispatch", return_value="valid output"):
+            result = process_tool_calls(tool_calls)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["content"], "valid output")
+        self.assertEqual(result[0]["tool_call_id"], "call_valid")
+
+        for handler in LOGGER.handlers:
+            if hasattr(handler, "flush"):
+                handler.flush()
+
+        with open(log_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("Skipping malformed tool call payload", content)
+
 
 # ---------------------------------------------------------------------------
 # Config / dotenv
